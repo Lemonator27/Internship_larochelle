@@ -1,0 +1,58 @@
+{
+    "base_taxable_amount": null,
+    "net_discounts": null,
+    "net_service_charge": null,
+    "taxable_amount": null,
+    "non_taxable_amount": null,
+    "net_total": null,
+    "tax_rate": null,
+    "tax_amount": null,
+    "base_gross_total": null,
+    "gross_discounts": null,
+    "gross_service_charge": null,
+    "gross_total": null,
+    "rounding_adjustment": null,
+    "commission_fee": null,
+    "due_amount": null,
+    "prior_balance": null,
+    "net_due_amount": null,
+    "paid_amount": null,
+    "change_amount": null,
+    "cash_amount": null,
+    "creditcard_amount": null,
+    "emoney_amount": null,
+    "other_payments": null,
+    "menutype_count": null,
+    "menuquantity_sum": null,
+    "line_items": [
+      {
+        "name": null,
+        "net_unit_price": null,
+        "unit_tax": null,
+        "gross_unit_price": null,
+        "quantity": null,
+        "net_price": null,
+        "tax_amount": null,
+        "gross_price": null,
+        "sub_items": [
+          {
+            "name": null,
+            "net_unit_price": null,
+            "unit_tax": null,
+            "gross_unit_price": null,
+            "quantity": null,
+            "net_price": null,
+            "tax_amount": null,
+            "gross_price": null
+          }
+        ],
+        "net_sub_items_total": null,
+        "gross_sub_items_total": null,
+        "net_total": null,
+        "net_discounts": null,
+        "total_tax": null,
+        "gross_discounts": null,
+        "gross_total": null
+      }
+    ]
+  }
