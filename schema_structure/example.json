@@ -1,58 +1,698 @@
 {
-    "base_taxable_amount": null,
-    "net_discounts": null,
-    "net_service_charge": null,
-    "taxable_amount": null,
-    "non_taxable_amount": null,
-    "net_total": null,
-    "tax_rate": null,
-    "tax_amount": null,
-    "base_gross_total": null,
-    "gross_discounts": null,
-    "gross_service_charge": null,
-    "gross_total": null,
-    "rounding_adjustment": null,
-    "commission_fee": null,
-    "due_amount": null,
-    "prior_balance": null,
-    "net_due_amount": null,
-    "paid_amount": null,
-    "change_amount": null,
-    "cash_amount": null,
-    "creditcard_amount": null,
-    "emoney_amount": null,
-    "other_payments": null,
-    "menutype_count": null,
-    "menuquantity_sum": null,
-    "line_items": [
-      {
-        "name": null,
-        "net_unit_price": null,
-        "unit_tax": null,
-        "gross_unit_price": null,
-        "quantity": null,
-        "net_price": null,
-        "tax_amount": null,
-        "gross_price": null,
-        "sub_items": [
-          {
-            "name": null,
-            "net_unit_price": null,
-            "unit_tax": null,
-            "gross_unit_price": null,
-            "quantity": null,
-            "net_price": null,
-            "tax_amount": null,
-            "gross_price": null
-          }
-        ],
-        "net_sub_items_total": null,
-        "gross_sub_items_total": null,
-        "net_total": null,
-        "net_discounts": null,
-        "total_tax": null,
-        "gross_discounts": null,
-        "gross_total": null
-      }
-    ]
-  }
+  "$defs": {
+    "InvoiceLineItem": {
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The name of the menu item",
+          "title": "Name"
+        },
+        "net_unit_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The unit price before tax",
+          "title": "Net Unit Price"
+        },
+        "unit_tax": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Tax amount per unit",
+          "title": "Unit Tax"
+        },
+        "gross_unit_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Unit price including tax",
+          "title": "Gross Unit Price"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Quantity ordered (can be decimal for weights/volumes/litres)",
+          "title": "Quantity"
+        },
+        "net_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Total price before tax (quantity \u00d7 net_unit_price)",
+          "title": "Net Price"
+        },
+        "tax_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Total tax amount (quantity \u00d7 unit_tax)",
+          "title": "Tax Amount"
+        },
+        "gross_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Total price including tax",
+          "title": "Gross Price"
+        },
+        "sub_items": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/InvoiceSubLineItem"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Additional components or modifications",
+          "identifier_field_name": "nm",
+          "title": "Sub Items"
+        },
+        "net_sub_items_total": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Total price of all sub-items before tax",
+          "title": "Net Sub Items Total"
+        },
+        "gross_sub_items_total": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Total price of all sub-items including tax",
+          "title": "Gross Sub Items Total"
+        },
+        "net_total": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Combined net price of item and sub-items before discounts",
+          "title": "Net Total"
+        },
+        "net_discounts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Discounts applied to net total of this item",
+          "title": "Net Discounts",
+          "unordered": true
+        },
+        "total_tax": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Combined tax amount for item and sub-items",
+          "title": "Total Tax"
+        },
+        "gross_discounts": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Discounts applied to the gross total of this item",
+          "title": "Gross Discounts",
+          "unordered": true
+        },
+        "gross_total": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Final price including tax and after discounts",
+          "title": "Gross Total"
+        }
+      },
+      "title": "InvoiceLineItem",
+      "type": "object"
+    },
+    "InvoiceSubLineItem": {
+      "properties": {
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The name of the sub-item or modification",
+          "title": "Name"
+        },
+        "net_unit_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The unit price of the sub-item before tax",
+          "title": "Net Unit Price"
+        },
+        "unit_tax": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The tax amount per unit of the sub-item",
+          "title": "Unit Tax"
+        },
+        "gross_unit_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The unit price of the sub-item including tax",
+          "title": "Gross Unit Price"
+        },
+        "quantity": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The quantity of the sub-item (can be a decimal for items sold by weight or volume)",
+          "title": "Quantity"
+        },
+        "net_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The total price of the sub-item before tax",
+          "title": "Net Price"
+        },
+        "tax_amount": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The total tax amount for the sub-item",
+          "title": "Tax Amount"
+        },
+        "gross_price": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The total price of the sub-item including tax",
+          "title": "Gross Price"
+        }
+      },
+      "title": "InvoiceSubLineItem",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "base_taxable_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The base amount that is subject to tax",
+      "title": "Base Taxable Amount"
+    },
+    "net_discounts": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Discounts applied to taxable amount before tax calculation",
+      "title": "Net Discounts",
+      "unordered": true
+    },
+    "net_service_charge": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Service charge applied to taxable amount before tax calculation",
+      "title": "Net Service Charge"
+    },
+    "taxable_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount that is subject to tax. This is the base amount plus net discounts and net service charges",
+      "title": "Taxable Amount"
+    },
+    "non_taxable_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The base amount that is not subject to tax",
+      "title": "Non Taxable Amount"
+    },
+    "net_total": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Sum of taxable and non-taxable amounts with their modifiers",
+      "title": "Net Total"
+    },
+    "tax_rate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Tax rate percentage applied to taxable amount",
+      "title": "Tax Rate"
+    },
+    "tax_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Total amount of tax on the invoice",
+      "title": "Tax Amount"
+    },
+    "base_gross_total": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The base amount that is subject to gross discounts and service charges",
+      "title": "Base Gross Total"
+    },
+    "gross_discounts": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Discounts applied to entire net total after tax",
+      "title": "Gross Discounts",
+      "unordered": true
+    },
+    "gross_service_charge": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Service charge applied to entire net total after tax",
+      "title": "Gross Service Charge"
+    },
+    "gross_total": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Final amount after all taxes and modifications",
+      "title": "Gross Total"
+    },
+    "rounding_adjustment": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Amount added/subtracted to round to desired precision",
+      "title": "Rounding Adjustment"
+    },
+    "commission_fee": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Commission amount deducted from total",
+      "title": "Commission Fee"
+    },
+    "due_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount due for the transaction before considering prior balance",
+      "title": "Due Amount"
+    },
+    "prior_balance": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Previous balance or credit applied to the current transaction",
+      "title": "Prior Balance"
+    },
+    "net_due_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The final amount due after applying prior balance",
+      "title": "Net Due Amount"
+    },
+    "paid_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The total amount paid by the customer",
+      "title": "Paid Amount"
+    },
+    "change_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount returned to the customer if overpayment occurred",
+      "title": "Change Amount"
+    },
+    "cash_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount paid in cash",
+      "title": "Cash Amount"
+    },
+    "creditcard_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount paid by credit card",
+      "title": "Creditcard Amount"
+    },
+    "emoney_amount": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The amount paid using electronic money",
+      "title": "Emoney Amount"
+    },
+    "other_payments": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Amounts paid using other methods (e.g., coupons, vouchers)",
+      "title": "Other Payments",
+      "unordered": true
+    },
+    "menutype_count": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The number of distinct menu item types in the order",
+      "title": "Menutype Count"
+    },
+    "menuquantity_sum": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The total quantity of all menu items ordered",
+      "title": "Menuquantity Sum"
+    },
+    "line_items": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/InvoiceLineItem"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Detailed list of individual items in the order",
+      "identifier_field_name": "nm",
+      "title": "Line Items"
+    }
+  },
+  "title": "Invoice",
+  "type": "object"
+}
