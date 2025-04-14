@@ -289,6 +289,7 @@ if __name__ == "__main__":
     for layers in model.base_model.model.model.vision_embed_tokens.img_processor.vision_model.encoder.layers:
         for param in layers.self_attn.k_proj.parameters():
             if param.requires_grad != True:
+                print("Unfrezzing does not work")
 
     model.print_trainable_parameters()
     
