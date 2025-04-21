@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import transformers
 from dataclasses import dataclass, field
-from transformers import AutoModelForCausalLM, AutoProcessor
+from transformers import AutoModelForCausalLM, AutoProcessor,Trainer,TrainingArguments
 from pydantic import Field
 import torch.optim as optim
 from peft import LoraConfig, get_peft_model, TaskType 
@@ -16,7 +16,7 @@ IMAGE_TOKEN_INDEX = -200
 IGNORE_INDEX = -100
 LLAVA_IMAGE_TOKEN = "<image>"
 
-FIXED_SCHEMA_PATH = "/Utilisateurs/dbui/json_schema/schema.json" 
+FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json" 
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
 fixed_schema_string = json.dumps(schema_dict, indent=2)
@@ -90,6 +90,7 @@ def load_data(image_ids: List[str], targets: List[Dict],ocred: List[str], image_
 class DataArguments:
     image_folder: str
     label_file: str
+    ocr_in_promt: bool = True
 
 def replace_image_tokens(input_string: str, start_count: int = 1) -> tuple[str, int]:
     count = start_count
@@ -128,7 +129,12 @@ class LazySupervisedDataset(Dataset):
 
         image: Image.Image = self.data['image'][i]
         label_str: str = self.data['label'][i]
-        ocr: str = self.data["ocr_text"][i]
+        
+        if data_args.ocr_in_promt == True:
+            ocr: str = self.data["ocr_text"][i]
+        else:
+            ocr: str = None
+            
         prompt: str = (
             f"""<|user|>\n{LLAVA_IMAGE_TOKEN} Your task is to extract the information for the fields "
             provided below from the image. Extract the information in JSON format
@@ -159,7 +165,7 @@ class LazySupervisedDataset(Dataset):
             return_tensors="pt",
             padding=False,
             truncation=True,
-            max_length=self.processor.tokenizer.model_max_length
+            max_length=16000
         )
         target_labels = label_inputs["input_ids"].squeeze(0)
 
@@ -224,134 +230,109 @@ class DataCollatorForSupervisedDataset(object):
 
 if __name__ == "__main__":
     model_id = "microsoft/Phi-3-vision-128k-instruct"
-    image_dir = r"/Utilisateurs/dbui/sroie/images"
-    label_path = r"/Utilisateurs/dbui/sroie/train-documents.jsonl"
+    image_dir = r"/home/bdinhlam/scratch/sroie/images"
+    label_path = r"/home/bdinhlam/scratch/sroie/train-documents.jsonl"
     num_epochs = 3
-    batch_size = 1
+    batch_size = 2
     learning_rate = 3e-5
-    lora_rank = 128
+    lora_rank = 32
     lora_alpha = 32
     lora_dropout = 0.05
+    save_path = "/model_full_trained"
 
     # --- Setup Device ---
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0")
     print(f"Using device: {device}")
 
     # --- Load Model and Processor ---
     print(f"Loading base model and processor: {model_id}")
+
+
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        device_map=None,
+        device_map="auto",
         trust_remote_code=True,
         torch_dtype="auto",
         _attn_implementation='flash_attention_2',
     )
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    print("Base model and processor loaded successfully.")
-
+    
     if processor.tokenizer.pad_token_id is None:
         processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
 
     # --- Configure LoRA ---
-    # print("Configuring LoRA...")
-    # target_modules = ["q_proj", "k_proj", "v_proj", "o_proj",
-    #                   "gate_proj", "up_proj", "down_proj"]
+    print("Configuring LoRA...")
+    target_modules = ["qkv_proj","gate_up_proj","down_proj",]
 
-    # lora_config = LoraConfig(
-    #     r=lora_rank,
-    #     lora_alpha=lora_alpha,
-    #     target_modules=target_modules,
-    #     lora_dropout=lora_dropout,
-    #     bias="none",
-    #     task_type=TaskType.CAUSAL_LM
-    # )
+    lora_config = LoraConfig(
+        r=lora_rank,
+        lora_alpha=lora_alpha,
+        target_modules=target_modules,
+        lora_dropout=lora_dropout,
+        bias="none",
+        task_type=TaskType.CAUSAL_LM
+    )
 
-    # # --- Wrap Model with PEFT ---
-    # print("Applying LoRA to the model...")
-    # model = get_peft_model(model, lora_config)
-    # print("LoRA applied successfully.")
-    # model.print_trainable_parameters()
+    # --- Wrap Model with PEFT ---
+    print("Applying LoRA to the model...")
+    model = get_peft_model(model, lora_config)
+    print("LoRA applied successfully.")
+    model.print_trainable_parameters()
     model.to(device)
     model.print_trainable_parameters()
     print(f"PEFT model moved to {device}.")
 
+    #Unfreezing the vision encoder since the LoRA_config would freeze all the weights automatically
+    for layers in model.base_model.model.model.vision_embed_tokens.img_processor.vision_model.encoder.layers:
+        for param in layers.self_attn.parameters():
+            param.requires_grad = True
+        for param in layers.mlp.parameters():
+            param.requires_grad = True
+    model.print_trainable_parameters()
     # --- Prepare Data ---
     data_args = DataArguments(
         image_folder=image_dir,
         label_file=label_path,
     )
 
-    print("Creating dataset...")
     train_dataset = LazySupervisedDataset(
         processor=processor,
         data_args=data_args,
     )
-    print(f"Dataset created with {len(train_dataset)} samples.")
-
-    if len(train_dataset) == 0:
-        print("FATAL ERROR: Dataset is empty. Exiting.")
-        exit()
-
     data_collator = DataCollatorForSupervisedDataset(
         pad_token_id=processor.tokenizer.pad_token_id
     )
-    print("Data collator created.")
-
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, collate_fn=data_collator
-    )
-    print(f"DataLoader created with batch size {batch_size}.")
-
-    # --- Setup Optimizer ---
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
-    print(f"Optimizer AdamW created with learning rate {learning_rate}.")
-
-    # --- Simple Training Loop ---
-    print("\n--- Starting LoRA Training ---")
     model.train()
+    # --- Configure Training Arguments ---
+    training_args = TrainingArguments(
+        output_dir=save_path,
+        num_train_epochs=num_epochs,
+        per_device_train_batch_size=batch_size,
+        learning_rate=learning_rate,
+        logging_dir="./logs",
+        logging_steps=10,
+        save_strategy="epoch",
+        remove_unused_columns=False,
+        report_to="none",
+        dataloader_num_workers=4,
+    )
 
-    for epoch in range(num_epochs):
-        print(f"\n--- Epoch {epoch+1}/{num_epochs} ---")
-        total_loss = []
-        num_batches = 0
+    # --- Initialize Trainer ---
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        data_collator=data_collator,
+        tokenizer=processor.tokenizer,
+    )
 
-        for step, batch in enumerate(train_dataloader):
-            if not batch:
-                continue
+    # --- Training ---
+    print("\n--- Starting LoRA Training with HF Trainer ---")
+    trainer.train()
 
-            batch = {k: v.to(device) for k, v in batch.items() if hasattr(v, 'to')} 
-
-            if 'pixel_values' not in batch:
-                 continue # Skip if no image data
-
-            outputs = model(**batch)
-            loss = outputs.loss
-            
-            if loss is None or not torch.isfinite(loss):
-                optimizer.zero_grad()
-                continue
-
-            loss.backward()
-            optimizer.step()
-            optimizer.zero_grad()
-
-            total_loss.append(loss.item())
-            num_batches += 1
-            if (step + 1) % 10 == 0:
-                print(f"  Step {step+1}/{len(train_dataloader)}, Batch Loss: {loss.item():.4f}")
-
-        avg_epoch_loss = sum(total_loss) / num_batches if num_batches > 0 else 0
-        print(f"--- End of Epoch {epoch+1} ---")
-        print(f"Average Training Loss: {avg_epoch_loss:.4f}")
-
-    print("\n--- Training Finished ---")
-
-    # --- (Optional) Save LoRA Adapters ---
-    save_path = "/model_full_trained"
-    print(f"Saving model adapters and tokenizer to {save_path}")
-    os.makedirs(save_path, exist_ok=True)
+    # --- Save Model ---
+    print("\n--- Saving Final Model ---")
     model.save_pretrained(save_path)
     processor.tokenizer.save_pretrained(save_path)
-
-    print("LoRA adapters and tokenizer saved.")
+    print("Training complete and model saved.")
 
