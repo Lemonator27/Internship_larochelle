@@ -11,6 +11,7 @@ from transformers import AutoModelForCausalLM, AutoProcessor,Trainer,TrainingArg
 from pydantic import Field
 import torch.optim as optim
 from peft import LoraConfig, get_peft_model, TaskType 
+from transformers import IntervalStrategy
 
 IMAGE_TOKEN_INDEX = -200
 IGNORE_INDEX = -100
@@ -74,7 +75,6 @@ def load_data(image_ids: List[str], targets: List[Dict],ocred: List[str], image_
         possible_extensions = ['.jpg']
         for ext in possible_extensions:
             file_path: str = os.path.join(image_base_path, f"{img_id}{ext}")
-            print(f"Loaded file {file_path}")
             if os.path.exists(file_path):
                 img = Image.open(file_path).convert('RGB')
                 images_files.append(img)
@@ -92,6 +92,7 @@ class DataArguments:
     image_folder: str
     label_file: str
     ocr_in_promt: bool = True
+    image_in_prompt: bool = True
 
 def replace_image_tokens(input_string: str, start_count: int = 1) -> tuple[str, int]:
     count = start_count
@@ -136,8 +137,15 @@ class LazySupervisedDataset(Dataset):
         else:
             ocr: str = None
         
+        if self.data_args.image_in_prompt == False:
+            image_token_for_prompt: str = "" 
+            image: Image.Image = None
+        else:
+            image_token_for_prompt = LLAVA_IMAGE_TOKEN
+            image: Image.Image = self.data['image'][i]
+        
         prompt: str = (
-            f"""<|user|>\n{LLAVA_IMAGE_TOKEN} Your task is to extract the information for the fields "
+            f"""<|user|>\n{image_token_for_prompt} Your task is to extract the information for the fields "
             provided below from the image. Extract the information in JSON format
             according to the following JSON schema: {fixed_schema_string}, Additional guidelines:
             - Extract only the elements that are present verbatim in the document text. Do NOT → infer any information.
@@ -231,8 +239,9 @@ class DataCollatorForSupervisedDataset(object):
 
 if __name__ == "__main__":
     model_id = "microsoft/Phi-3-vision-128k-instruct"
-    image_dir = r"/home/bdinhlam/scratch/sroie/images"
-    label_path = r"/home/bdinhlam/scratch/sroie/train-documents.jsonl"
+    image_dir = r"/home/bdinhlam/scratch/dataset/cord/images"
+    label_path = r"/home/bdinhlam/scratch/dataset/cord/train-documents.jsonl"
+    val_path = r"/home/bdinhlam/scratch/dataset/cord/validation-documents.jsonl"
     num_epochs = 3
     batch_size = 1
     learning_rate = 3e-5
@@ -253,7 +262,7 @@ if __name__ == "__main__":
     if processor.tokenizer.pad_token_id is None:
         processor.tokenizer.pad_token_id = processor.tokenizer.eos_token_id
         
-    processor.tokenizer.model_max_length = 5800
+    processor.tokenizer.model_max_length = 6000
     processor.tokenizer.pad_token = processor.tokenizer.unk_token  
     processor.tokenizer.pad_token_id = processor.tokenizer.convert_tokens_to_ids(processor.tokenizer.pad_token)
     processor.tokenizer.padding_side = 'right'
@@ -289,28 +298,49 @@ if __name__ == "__main__":
     data_args = DataArguments(
         image_folder=image_dir,
         label_file=label_path,
+        image_in_prompt = True,
+        ocr_in_promt = True
     )
+    
+    val_args = DataArguments(
+        image_folder=image_dir,
+        label_file=val_path,
+        image_in_prompt=True,
+        ocr_in_promt = True,
+    )
+
 
     train_dataset = LazySupervisedDataset(
         processor=processor,
         data_args=data_args,
     )
+    
+    val_dataset = LazySupervisedDataset(
+        processor=processor,
+        data_args=val_args,
+    )
+    
     data_collator = DataCollatorForSupervisedDataset(
         pad_token_id=processor.tokenizer.pad_token_id
     )
     model.train()
     # --- Configure Training Arguments ---
     training_args = TrainingArguments(
-        output_dir=save_path,
+        output_dir="/home/bdinhlam/scratch/weight/weight_cord/ocr_image",
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
         learning_rate=learning_rate,
+        per_device_eval_batch_size = 1,
         logging_dir="./logs",
         logging_steps=10,
         save_strategy="epoch",
         remove_unused_columns=False,
-        report_to="none",
+        optim="adamw_torch",
+        report_to="wandb",
         dataloader_num_workers=4,
+        greater_is_better=False,
+        do_eval = True,
+        eval_strategy = "epoch",
     )
 
     # --- Initialize Trainer ---
@@ -318,6 +348,7 @@ if __name__ == "__main__":
         model=model,
         args=training_args,
         train_dataset=train_dataset,
+        eval_dataset = val_dataset,
         data_collator=data_collator,
         tokenizer=processor.tokenizer,
     )
@@ -325,10 +356,10 @@ if __name__ == "__main__":
     # --- Training ---
     print("\n--- Starting LoRA Training with HF Trainer ---")
     trainer.train()
-
+    
     # --- Save Model ---
     print("\n--- Saving Final Model ---")
-    model.save_pretrained(save_path)
+    model.save_pretrained("/home/bdinhlam/scratch/weight/weight_cord/ocr_image")
     processor.tokenizer.save_pretrained(save_path)
     print("Training complete and model saved.")
 
