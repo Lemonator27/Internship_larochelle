@@ -4,6 +4,7 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
     TrainingArguments,
+    Trainer
 )
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer
@@ -11,10 +12,13 @@ import json
 from typing import Dict, List 
 import argparse
 import os 
-import transformers
+import datasets
 from torch.utils.data import Dataset
 
 FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json" 
+train_path = "/home/bdinhlam/scratch/dataset/cord/train-documents.jsonl"
+val_path  = "/home/bdinhlam/scratch/dataset/cord/validation-documents.jsonl"
+
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
 fixed_schema_string = json.dumps(schema_dict, indent=2)
@@ -49,8 +53,8 @@ lora_config = LoraConfig(
     )
 # Apply LoRA config to model
 model = get_peft_model(model, lora_config)
+model.print_trainable_parameters()
 
-# Loading json file to get OCR_text and labels 
 def load_json_lines(file_path: str) -> tuple[List[str], List[Dict]]:
     print(f"Loading labels from: {file_path}")
     targets: List[Dict] = []
@@ -64,62 +68,61 @@ def load_json_lines(file_path: str) -> tuple[List[str], List[Dict]]:
     print(f"Loaded {len(targets)} labels.")
     return targets, ocr_text
 
-class LazySupervisedDataset(Dataset):
-    def __init__(self, processor: transformers.ProcessorMixin,json_path):
-        super().__init__()
-        self.processor = processor
-        self.path_json = json_path
+label_train, ocr_train = load_json_lines(train_path)
+label_val, ocr_val = load_json_lines(val_path)
 
-        self.all_labels_dict, self.ocr_text = load_json_lines(self.path_json)
-
-    def __len__(self) -> int:
-        return len(self.data['image'])
-
-    def __getitem__(self, i: int) -> Dict[str, torch.Tensor]:
-        if i >= len(self.data['image']):
-             raise IndexError(f"Index {i} out of bounds for dataset with length {len(self.data['image'])}")
-        ocred = self.ocr_text[i]
-        label_str = self.all_labels_dict[i]
-        
-        prompt = {"text": f"""[INST]: 
-           Extract the information in JSON format according to the following JSON schema: {fixed_schema_string}
-         - Extract only the elements that are present verbatim in the document text. Do NOT infer any information.
-         - Extract each element EXACTLY as it appears in the document.
-         - Each value in the OCR can only be used AT MOST once. If a value can correspond to multiple fields, pick the best one.
-         - For each object, output all the keys from the schema even if the value is null. Empty lists should be outputted as lists with no elements.
-         - If no indication of tax is given, assume the amounts to be gross amounts.
-         <ocr>
-         {ocred}
-         </ocr>
-         Please read the text carefully and follow the instructions.
-         /INST]{label_str}"""}
-        
-        inputs = self.processor(
-            text=prompt,
-            return_tensors="pt",
-            max_length = 6000,
-            padding="max_length",
+def create_instruct_messages(ocr,label):
+    prompt = (
+            f"""Your task is to extract the information for the fields
+            Extract the information in JSON format according to the following JSON schema: {fixed_schema_string}, Additional guidelines:
+            - Extract only the elements that are present verbatim in the document text. Do NOT → infer any information.
+            - Extract each element EXACTLY as it appears in the document.
+            - Each value in the OCR can only be used AT MOST once. If a value can correspond to multiple fields, pick the best one.
+            - For each object, output all the keys from the schema even if the value is null. Empty lists should be outputted as lists with no elements.
+            - If no indication of tax is given, assume the amounts to be gross amounts.
+            <ocr>
+            {ocr}
+            </ocr>
+            Please read the text carefully and follow the instructions.
+            """
         )
+    response = f"{label}"
 
-        return inputs
+    return {
+        'messages': [
+            { 'role': 'user', 'content': prompt},
+            { 'role': 'assistant', 'content': response}
+        ]
+    }
 
-train_dataset = LazySupervisedDataset(
-        processor=tokenizer,
-        path_json="",
-    )
+def create_list(label:List, ocr:List):
+    list_of_prompt = []
+    for i in range(len(label)):
+        prompt = create_instruct_messages(ocr[i] , label[i])
+        list_of_prompt.append(prompt)
+        
+    return list_of_prompt
+
+train_list = create_list(label_train, ocr_train)
+val_list  = create_list(label_val,ocr_val)
+
+print("Finished list")
     
-val_dataset = LazySupervisedDataset(
-        processor=tokenizer,
-        path_json="",
-    )
+train_dataset = datasets.Dataset.from_list(train_list)
+val_dataset = datasets.Dataset.from_list(val_list)
 
+print("Finished mapping")
+
+per_device_train_batch_size = 2
+gradient_accumulation_steps = 1
+num_epochs = 4
 
 
 training_args = TrainingArguments(
-        output_dir="/home/bdinhlam/scratch/weight/weight_cord/ocr_image",
-        num_train_epochs=3,
+        output_dir="/home/bdinhlam/scratch/weight/weight_mistral_cord/",
+        num_train_epochs=4,
         per_device_train_batch_size=1,
-        learning_rate=3e-5,
+        learning_rate=5e-5,
         per_device_eval_batch_size = 1,
         logging_dir="./logs",
         logging_steps=10,
@@ -128,20 +131,21 @@ training_args = TrainingArguments(
         optim="adamw_torch",
         report_to="wandb",
         dataloader_num_workers=4,
-        greater_is_better=False,
+        greater_is_better=False,     
+        eval_strategy="steps", 
+        eval_steps=100,    
         do_eval = True,
-        eval_strategy = "epoch",
+        save_total_limit=5,
     )
 
 # Initialize trainer
 trainer = SFTTrainer(
-    model=model,
-    train_dataset=formatted_dataset["train"],
-    args=training_args,
-    tokenizer=tokenizer,
-    dataset_text_field="text",
-    max_seq_length=2048,
-)
+        model=model,
+        processing_class=tokenizer,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        args=training_args, 
+    )
 
 # Train
 trainer.train()
