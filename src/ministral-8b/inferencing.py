@@ -11,9 +11,9 @@ from peft import PeftModel
 import json
 
 FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json" 
-train_path = "/home/bdinhlam/scratch/dataset/cord/train-documents.jsonl"
-val_path  = "/home/bdinhlam/scratch/dataset/cord/validation-documents.jsonl"
-lora_adapter_path = ""
+test_path = "/home/bdinhlam/scratch/dataset/cord/test-documents.jsonl"
+lora_adapter_path = "/home/bdinhlam/scratch/weight/weight_mistral_cord/checkpoint-800"
+output_json_path = "/home/bdinhlam/scratch/weight/home/bdinhlam/scratch/weight/weight_mistral_cord/"
 
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
@@ -43,7 +43,7 @@ model = model.merge_and_unload()
 def load_json_lines(file_path: str) -> tuple[List[Dict]]:
     print(f"Loading labels from: {file_path}")
     ocr_text: List[str] = []
-    id_image = List[str] = []
+    id_image: List[str] = []
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             obj = json.loads(line.strip())
@@ -52,8 +52,6 @@ def load_json_lines(file_path: str) -> tuple[List[Dict]]:
                 id_image.append(obj["id"])
                 
     return ocr_text,id_image
-
-ocr_test,id_image = load_json_lines(train_path)
 
 def create_instruct_messages(ocr):
     prompt = (
@@ -80,21 +78,29 @@ def create_list(ocr:List):
         list_of_prompt.append(prompt)
     return list_of_prompt
 
-
-test_list = create_list(ocr_test)
-
 def get_eval_results(test_list,id_list):
-    eval_results = defaultdict(dict) 
+    eval_results: Dict[str, Dict] = {}
     for i, prompt in enumerate(test_list):
         with torch.no_grad():
             input_index = tokenizer(prompt,return_tensors="pt").to("cuda")
-            output_ids = model.generate(**input_index,max_new_token = 6000)
-            eval_output = tokenizer.decode(output_ids)
+            output_ids = model.generate(**input_index,max_new_tokens = 6000)
+            actual_output_tokens = output_ids[:, input_index["input_ids"].shape[1]:]
+            eval_output = tokenizer.decode(actual_output_tokens[0], skip_special_tokens=True)
+            print(eval_output)
             try:
-                schemas = json.dump(eval_output)
-            except Exception as e:
+                schemas = json.loads(eval_output)
+                eval_results[id_list[i]] = schemas
+            except json.JSONDecodeError as e:
                 print(e)
-            eval_results[id_list[i]] = schemas
+    print(f"Finished processing {eval_results} samples")
+    return eval_results
+
+if __name__ == "__main__":
+    ocr_test,id_image = load_json_lines(test_path)
+    prompt_list = create_list(ocr_test)
+    eval_results = get_eval_results(prompt_list,id_image)
+    with open(output_json_path, 'w', encoding='utf-8') as f:
+        json.dump(eval_results, f, indent=4, ensure_ascii=False)
             
 
 
