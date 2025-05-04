@@ -30,8 +30,6 @@ parser.add_argument("--attn_implementation", type=str, default="flash_attention_
                     help="Attention implementation ('flash_attention_2', 'sdpa', 'eager'). Use 'None' for default.")
 parser.add_argument("--max_new_tokens", type=int, default=None, # Default to None, will use processor default later
                     help="Maximum number of new tokens to generate.")
-parser.add_argument("--temperature", type=float, default=0.0,
-                    help="Generation temperature.")
 parser.add_argument("--do_sample", action='store_true', 
                     help="Enable sampling during generation.")
 parser.add_argument("--image_in_prompt", action='store_true', 
@@ -58,20 +56,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 logging.info(f"Script arguments: {args}")
 
-# Direct checks without try-except
-if not os.path.isdir(IMAGE_FOLDER_PATH):
-    logging.error(f"Image folder not found: {IMAGE_FOLDER_PATH}")
-    exit()
-
-if not os.path.isfile(FIXED_SCHEMA_PATH):
-    logging.error(f"Schema file not found: {FIXED_SCHEMA_PATH}")
-    exit()
-
-if not os.path.isfile(input_jsonl_path):
-    logging.error(f"Input JSONL file not found: {input_jsonl_path}")
-    exit()
-
-# Direct file loading without try-except
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
 fixed_schema_string = json.dumps(schema_dict, indent=2)
@@ -93,14 +77,12 @@ logging.info(f"Base model loaded successfully onto device: {device}.") # More sp
 
 
 logging.info(f"Attempting to load LoRA adapter from: {lora_adapter_path}")
-if lora_adapter_path: # Check if the path was provided
+if lora_adapter_path: 
     if not os.path.isdir(lora_adapter_path):
-        # Changed from warning to info/error as script will likely fail later if adapter needed
         logging.info(f"LoRA adapter path specified but not found: {lora_adapter_path}. Proceeding without merging.")
         model = base_model
     else:
         logging.info("Loading and merging LoRA adapter...")
-        # Direct loading/merging without try-except
         model = PeftModel.from_pretrained(base_model, lora_adapter_path)
         model = model.merge_and_unload()
         logging.info("Finished merging LoRA adapter.")
@@ -116,13 +98,12 @@ logging.info("Processor loaded successfully.")
 
 
 # --- Setup Generation Arguments ---
-effective_max_new_tokens = args.max_new_tokens if args.max_new_tokens is not None else processor.tokenizer.model_max_length
-
+effective_max_new_tokens = 7000
 generation_args = {
     "max_new_tokens": effective_max_new_tokens,
-    "temperature": args.temperature,
-    "do_sample": args.do_sample,
 }
+
+
 logging.info(f"Generation arguments set: {generation_args}")
 
 SUPPORTED_EXTENSIONS = ('.jpg')
@@ -136,12 +117,10 @@ def load_test_image(file_path: str):
             obj = json.loads(line.strip())
             base_name = obj["id"]
             found_image = False
-            for ext in SUPPORTED_EXTENSIONS:
-                image_filename = base_name + ext
-                full_path = os.path.join(IMAGE_FOLDER_PATH, image_filename)
-                if os.path.isfile(full_path):
-                     image_paths.append(full_path)
-                     ocr_results.append(obj["page_texts"])
+            image_filename = base_name + ".jpg"
+            full_path = os.path.join(IMAGE_FOLDER_PATH, image_filename)
+            image_paths.append(full_path)
+            ocr_results.append(obj["page_texts"])
     return image_paths, ocr_results
 
 image_paths, ocr_text = load_test_image(input_jsonl_path)
@@ -166,7 +145,8 @@ for i, filename in enumerate(image_paths):
         ocred = None
 
     messages = [
-        {"role": "user", "content": f"""<|image_1|>
+        {"role": "user", "content": f"""
+           {image_token}
            Extract the information in JSON format according to the following JSON schema: {fixed_schema_string}
          - Extract only the elements that are present verbatim in the document text. Do NOT infer any information.
          - Extract each element EXACTLY as it appears in the document.
@@ -177,12 +157,12 @@ for i, filename in enumerate(image_paths):
          {ocred}
          </ocr>
          Please read the text carefully and follow the instructions.
-         {image_token}
          <|end|><|assistant|>"""},
     ]
+    print(messages)
     prompt = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-    inputs = processor(prompt, [image], return_tensors="pt").to(model.device)
+    inputs = processor(prompt, image, return_tensors="pt").to(model.device)
 
     with torch.no_grad():
         generate_ids = model.generate(**inputs, eos_token_id=processor.tokenizer.eos_token_id, **generation_args)
@@ -211,7 +191,6 @@ for i, filename in enumerate(image_paths):
     del inputs
     del generate_ids
     del image
-    # del generated_part_ids # Still just a view
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 

@@ -11,7 +11,7 @@ from transformers import AutoModelForCausalLM, AutoProcessor,Trainer,TrainingArg
 from pydantic import Field
 import torch.optim as optim
 from peft import LoraConfig, get_peft_model, TaskType 
-from transformers import IntervalStrategy
+import argparse
 
 IMAGE_TOKEN_INDEX = -200
 IGNORE_INDEX = -100
@@ -145,8 +145,8 @@ class LazySupervisedDataset(Dataset):
             image: Image.Image = self.data['image'][i]
         
         prompt: str = (
-            f"""<|user|>\n{image_token_for_prompt} Your task is to extract the information for the fields "
-            provided below from the image. Extract the information in JSON format
+            f"""<|user|>\n{image_token_for_prompt} 
+            Your task is to extract the information for the fields provided below from the image. Extract the information in JSON format
             according to the following JSON schema: {fixed_schema_string}, Additional guidelines:
             - Extract only the elements that are present verbatim in the document text. Do NOT → infer any information.
             - Extract each element EXACTLY as it appears in the document.
@@ -248,7 +248,16 @@ if __name__ == "__main__":
     lora_rank = 2
     lora_alpha = 32
     lora_dropout = 0.05
-    save_path = "/model_full_trained"
+    save_path = "/home/bdinhlam/scratch/weight/weight_cord/image_only"
+    
+    parser = argparse.ArgumentParser(description="Extract structured information from images using a multimodal model.")
+    
+    parser.add_argument("--image_in_prompt", action='store_true', 
+                    help="If image should be in the prompt")
+    parser.add_argument("--ocr_in_prompt", action='store_true', 
+                    help="If ocr should be in the prompt")
+    args = parser.parse_args()
+    
 
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
@@ -294,19 +303,35 @@ if __name__ == "__main__":
         for param in layers.mlp.parameters():
             param.requires_grad = True
     model.print_trainable_parameters()
+    
     # --- Prepare Data ---
+    
+    ocr_in_prompt = args.ocr_in_prompt
+    image_in_prompt = args.image_in_prompt
+
+    if ocr_in_prompt and image_in_prompt:
+        data_config_path = "ocr_image"
+    elif ocr_in_prompt:
+        data_config_path = "ocr_only"
+    elif image_in_prompt:
+        data_config_path = "image_only"
+    if ocr_in_prompt and image_in_prompt:
+        data_config_path = "ocr_image"
+    print(data_config_path)
+         
+    
     data_args = DataArguments(
         image_folder=image_dir,
         label_file=label_path,
-        image_in_prompt = True,
-        ocr_in_promt = True
+        image_in_prompt = image_in_prompt,
+        ocr_in_promt = ocr_in_prompt,
     )
-    
+
     val_args = DataArguments(
         image_folder=image_dir,
         label_file=val_path,
-        image_in_prompt=True,
-        ocr_in_promt = True,
+        image_in_prompt= image_in_prompt,
+        ocr_in_promt = ocr_in_prompt,
     )
 
 
@@ -326,21 +351,22 @@ if __name__ == "__main__":
     model.train()
     # --- Configure Training Arguments ---
     training_args = TrainingArguments(
-        output_dir="/home/bdinhlam/scratch/weight/weight_cord/ocr_image",
+        output_dir=f"/home/bdinhlam/scratch/weight/weight_cord/{data_config_path}",
         num_train_epochs=num_epochs,
         per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=1,
         learning_rate=learning_rate,
-        per_device_eval_batch_size = 1,
         logging_dir="./logs",
         logging_steps=10,
-        save_strategy="epoch",
+        save_strategy="epoch",         
+        eval_strategy="steps", 
+        eval_steps=100,    
         remove_unused_columns=False,
         optim="adamw_torch",
         report_to="wandb",
         dataloader_num_workers=4,
         greater_is_better=False,
         do_eval = True,
-        eval_strategy = "epoch",
     )
 
     # --- Initialize Trainer ---
@@ -359,7 +385,7 @@ if __name__ == "__main__":
     
     # --- Save Model ---
     print("\n--- Saving Final Model ---")
-    model.save_pretrained("/home/bdinhlam/scratch/weight/weight_cord/ocr_image")
+    model.save_pretrained("/home/bdinhlam/scratch/weight/weight_cord/{path}")
     processor.tokenizer.save_pretrained(save_path)
     print("Training complete and model saved.")
 

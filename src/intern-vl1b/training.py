@@ -134,9 +134,6 @@ class VLDataset(Dataset):
         
         for idx, (img_id, label, ocr) in enumerate(zip(image_ids, labels, ocr_texts)):
             img_path = os.path.join(self.data_args.image_folder, f"{img_id}.jpg")
-            
-            if not os.path.exists(img_path):
-                continue
                 
             try:
                 image = Image.open(img_path).convert("RGB")
@@ -181,8 +178,8 @@ def load_json_lines(file_path: str) -> Tuple[List[str], List[Dict], List[str]]:
 def train():
     # Initialize dataset and dataloader
     data_args = DataArguments(
-        image_folder="/path/to/images",
-        label_file="/path/to/labels.jsonl"
+        image_folder="/Utilisateurs/dbui/sroie/images",
+        label_file="/Utilisateurs/dbui/sroie/train-documents.jsonl"
     )
     
     dataset = VLDataset(processor, data_args)

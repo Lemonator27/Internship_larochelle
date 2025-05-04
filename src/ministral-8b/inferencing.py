@@ -6,14 +6,21 @@ from transformers import (
 )
 import json
 from typing import Dict, List 
-from collections import defaultdict
+import argparse
 from peft import PeftModel
 import json
 
+
+parser = argparse.ArgumentParser(description="Extract structured information from images using a multimodal model.")
+parser.add_argument("--dataset", type=str, required=True,
+                    help="Dataset name for training")
+args = parser.parse_args()
+
+dataset = args.dataset
 FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json" 
-test_path = "/home/bdinhlam/scratch/dataset/cord/test-documents.jsonl"
-lora_adapter_path = "/home/bdinhlam/scratch/weight/weight_mistral_cord/checkpoint-800"
-output_json_path = "/home/bdinhlam/scratch/weight/home/bdinhlam/scratch/weight/weight_mistral_cord/"
+test_path = f"/home/bdinhlam/scratch/dataset/{dataset}/test-documents.jsonl"
+lora_adapter_path = f"/home/bdinhlam/scratch/weight/weight_mistral_{dataset}"
+output_json_path = f"/home/bdinhlam/scratch/weight/home/bdinhlam/scratch/weight/weight_mistral_{dataset}/output_{dataset}.json"
 
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
@@ -40,6 +47,7 @@ tokenizer.pad_token = tokenizer.eos_token
 model = PeftModel.from_pretrained(model, lora_adapter_path)
 model = model.merge_and_unload()
 
+print("Finished mergin weights")
 def load_json_lines(file_path: str) -> tuple[List[Dict]]:
     print(f"Loading labels from: {file_path}")
     ocr_text: List[str] = []
@@ -54,8 +62,7 @@ def load_json_lines(file_path: str) -> tuple[List[Dict]]:
     return ocr_text,id_image
 
 def create_instruct_messages(ocr):
-    prompt = (
-            f"""Your task is to extract the information for the fields
+    prompt = f"""
             Extract the information in JSON format according to the following JSON schema: {fixed_schema_string}, Additional guidelines:
             - Extract only the elements that are present verbatim in the document text. Do NOT → infer any information.
             - Extract each element EXACTLY as it appears in the document.
@@ -67,7 +74,6 @@ def create_instruct_messages(ocr):
             </ocr>
             Please read the text carefully and follow the instructions.
             """
-        )
 
     return prompt
 
@@ -82,22 +88,36 @@ def get_eval_results(test_list,id_list):
     eval_results: Dict[str, Dict] = {}
     for i, prompt in enumerate(test_list):
         with torch.no_grad():
+            print(f"Processing sample of id {id_list[i]}")
             input_index = tokenizer(prompt,return_tensors="pt").to("cuda")
-            output_ids = model.generate(**input_index,max_new_tokens = 6000)
+            print(prompt)
+            output_ids = model.generate(**input_index,max_new_tokens = 16000)
             actual_output_tokens = output_ids[:, input_index["input_ids"].shape[1]:]
             eval_output = tokenizer.decode(actual_output_tokens[0], skip_special_tokens=True)
-            print(eval_output)
+            print(f"Raw model output for sample {id_list[i]}:\n{eval_output}")
+            response = eval_output.strip()
+            if response.startswith("```json"):
+                response = response[len("```json"):].strip()
+            if response.startswith("```"):
+                response = response[len("```"):].strip()
+            if response.endswith("```"):
+                response = response[:-len("```")].strip()
+            if response == None:
+                print("The script failed somewhere")
             try:
-                schemas = json.loads(eval_output)
+                schemas = json.loads(response)
                 eval_results[id_list[i]] = schemas
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError as e:   
                 print(e)
     print(f"Finished processing {eval_results} samples")
     return eval_results
 
 if __name__ == "__main__":
+    print("Loading json files")
     ocr_test,id_image = load_json_lines(test_path)
+    print("Loading prompt")
     prompt_list = create_list(ocr_test)
+    print("Start inferencing...")
     eval_results = get_eval_results(prompt_list,id_image)
     with open(output_json_path, 'w', encoding='utf-8') as f:
         json.dump(eval_results, f, indent=4, ensure_ascii=False)
