@@ -11,7 +11,6 @@ import json
 from typing import Dict, List 
 import argparse 
 import datasets
-from torch.utils.data import Dataset
 parser = argparse.ArgumentParser(description="Extract structured information from images using a multimodal model.")
 parser.add_argument("--dataset", type=str, required=True,
                     help="Dataset name for training")
@@ -20,25 +19,17 @@ args = parser.parse_args()
 dataset = args.dataset
 
 FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json" 
-train_path = f"/home/bdinhlam/scratch/dataset/{dataset}/train-documents.jsonl"
-val_path  = f"/home/bdinhlam/scratch/dataset/{dataset}/validation-documents.jsonl"
-save_model_path = f"/home/bdinhlam/scratch/weight/weight_mistral_{dataset}/"
+train_path = f"/home/bdinhlam/scratch/dataset/{dataset}/train-documents.jsonl" 
+val_path  = f"/home/bdinhlam/scratch/dataset/{dataset}/validation-documents.jsonl" 
+save_model_path = f"/home/bdinhlam/scratch/weight/weight_mistral_{dataset}_new/"
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
     schema_dict = json.load(f)
 fixed_schema_string = json.dumps(schema_dict, indent=2)
 print(f"Successfully loaded fixed schema from: {FIXED_SCHEMA_PATH}")
 
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
-    bnb_4bit_use_double_quant=True,
-)
-
 model_id = "mistralai/Ministral-8B-Instruct-2410"
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
-    quantization_config=bnb_config,
     device_map="auto",
     trust_remote_code=True,
 )
@@ -55,9 +46,6 @@ lora_config = LoraConfig(
         bias="none",
         task_type="CAUSAL_LM",
     )
-# Apply LoRA config to model
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()
 
 def load_json_lines(file_path: str) -> tuple[List[str], List[Dict]]:
     print(f"Loading labels from: {file_path}")
@@ -80,7 +68,6 @@ def create_instruct_messages(ocr,label):
             - Each value in the OCR can only be used AT MOST once. If a value can correspond to multiple fields, pick the best one.
             - For each object, output all the keys from the schema even if the value is null. Empty lists should be outputted as lists with no elements.
             - If no indication of tax is given, assume the amounts to be gross amounts.
-            - Return only the json schema and nothing else
             <ocr>
             {ocr}
             </ocr>
@@ -100,8 +87,17 @@ def create_list(label:List, ocr:List):
     for i in range(len(label)):
         prompt = create_instruct_messages(ocr[i] , label[i])
         list_of_prompt.append(prompt)
-        
+        print(prompt)
     return list_of_prompt
+
+def format_chat_template(example):
+    return {
+        'text': tokenizer.apply_chat_template(
+            example['messages'],
+            tokenize=False,
+            add_generation_prompt=False
+        )
+    }
 
 label_train, ocr_train = load_json_lines(train_path)
 label_val, ocr_val = load_json_lines(val_path)
@@ -111,10 +107,12 @@ val_list  = create_list(label_val,ocr_val)
 
 print("Finished list")
     
-train_dataset = datasets.Dataset.from_list(train_list)
-val_dataset = datasets.Dataset.from_list(val_list)
+train_dataset = datasets.Dataset.from_list(train_list).map(format_chat_template)
+val_dataset = datasets.Dataset.from_list(val_list).map(format_chat_template)
 
 print("Finished mapping")
+
+print(train_dataset[0])
 
 per_device_train_batch_size = 2
 gradient_accumulation_steps = 1
@@ -122,9 +120,9 @@ num_epochs = 4
 
 effective_batch_size = per_device_train_batch_size * gradient_accumulation_steps
 steps_per_epoch = len(train_dataset) // effective_batch_size
-eval_save_steps = max(1, steps_per_epoch // 5)
-
-early_stopping_patience = 3
+eval_save_steps = 40
+print(eval_save_steps)
+early_stopping_patience = 5
 
 early_stopping_threshold = 0.0
 
@@ -133,7 +131,7 @@ early_stopping_callback = EarlyStoppingCallback(
     early_stopping_threshold=early_stopping_threshold,
 )
 
-training_args = training_args = SFTConfig(
+training_args = SFTConfig(
         output_dir=save_model_path,
         max_seq_length=16000,
         learning_rate=5e-5,  # Lower learning rate for stability
@@ -145,7 +143,7 @@ training_args = training_args = SFTConfig(
         weight_decay=0.05,  # Increased from 0.01 for better regularization
         eval_strategy="steps",
         save_strategy="steps",
-        eval_steps=eval_save_steps,
+        eval_steps=40,
         save_steps=eval_save_steps,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
@@ -158,7 +156,7 @@ training_args = training_args = SFTConfig(
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         max_grad_norm=1.0,  # Added gradient clipping
-    )
+        )
 
 # Initialize trainer
 trainer = SFTTrainer(
@@ -167,8 +165,10 @@ trainer = SFTTrainer(
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         args=training_args,
-        callbacks=[early_stopping_callback]
+        callbacks=[early_stopping_callback],
+        peft_config=lora_config,
 )
 
 # Train
 trainer.train()
+trainer.save_model(save_model_path)

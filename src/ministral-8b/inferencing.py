@@ -8,20 +8,29 @@ from typing import Dict, List
 import argparse
 from peft import PeftModel
 import ast
+from transformers import TextStreamer
+import re
+
 parser = argparse.ArgumentParser(description="Extract structured information from images using a multimodal model.")
 parser.add_argument("--dataset", type=str, required=True,
                     help="Dataset name for training")
 parser.add_argument("--adapter", type=str, required=True,
                     help="Folder name of the LoRA adapter")
+parser.add_argument("--set_type", type=str, required=True,
+                    help="Folder name of the LoRA adapter")
+parser.add_argument("--using_finetuned", action='store_true',
+                    help="If ocr should be in the prompt (currently always included by create_chat_messages)")
 args = parser.parse_args()
 
 dataset = args.dataset
 adapter_folder_name = args.adapter
+set_type = args.set_type
+finetune = args.using_finetuned
 
 FIXED_SCHEMA_PATH = "/home/bdinhlam/schema/schema.json"
-test_path = f"/home/bdinhlam/scratch/dataset/{dataset}/test-documents.jsonl"
+test_path = f"/home/bdinhlam/scratch/dataset/{dataset}/{set_type}-documents.jsonl"
 lora_adapter_path = f"/home/bdinhlam/scratch/weight/{adapter_folder_name}"
-output_json_path = f"/home/bdinhlam/scratch/weight/weight_mistral_cord/output_{dataset}.json"
+output_json_path = f"/home/bdinhlam/scratch/weight/weight_mistral_cord/output_{dataset}_base_{set_type}.json"
 
 
 with open(FIXED_SCHEMA_PATH, 'r', encoding='utf-8') as f:
@@ -35,20 +44,20 @@ model_id = "mistralai/Ministral-8B-Instruct-2410"
 print(f"Using base model ID: {model_id}")
 
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
-    print("Set tokenizer.pad_token to tokenizer.eos_token")
+#if tokenizer.pad_token is None:
+#    tokenizer.pad_token = tokenizer.eos_token
+#    print("Set tokenizer.pad_token to tokenizer.eos_token")
 
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     device_map="auto",
     trust_remote_code=True,
 )
-
-model = PeftModel.from_pretrained(model, lora_adapter_path)
-model = model.merge_and_unload()
+if finetune:
+    model = PeftModel.from_pretrained(model, lora_adapter_path)
+    model = model.merge_and_unload()
 model.eval()
-
+text_streamer_for_describe = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 print("Finished merging weights and set model to evaluation mode.")
 
 def load_json_lines(file_path: str) -> tuple[List[str], List[str]]:
@@ -107,21 +116,27 @@ def get_eval_results(ocr_list: List[str], id_list: List[str], schema_str: str) -
         with torch.no_grad():
             output_ids = model.generate(
                 tokenized_chat,
-                max_new_tokens=16000,
+                max_new_tokens=10000,
                 do_sample=False,
-                pad_token_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+                streamer=text_streamer_for_describe
             )
 
         response_ids = output_ids[:, tokenized_chat.shape[1]:]
         eval_output = tokenizer.decode(response_ids[0], skip_special_tokens=True)
         response = eval_output.strip()
 
-        if response.startswith("```json"):
-            response = response[len("```json"):].strip()
-        if response.startswith("```"):
-            response = response[len("```"):].strip()
-        if response.endswith("```"):
-            response = response[:-len("```")].strip()
+        json_pattern = r'\{(?:[^{}]|(?:\{(?:[^{}]|(?:\{[^{}]*\})*)*\})*|(?:\[[^\[\]]*\]))*\}'
+        cleaned_eval_output = response
+        if cleaned_eval_output.startswith("```json"):
+            cleaned_eval_output = cleaned_eval_output[len("```json"):].strip()
+        if cleaned_eval_output.startswith("```"):
+            cleaned_eval_output = cleaned_eval_output[len("```"):].strip()
+        if cleaned_eval_output.endswith("```"):
+            cleaned_eval_output = cleaned_eval_output[:-len("```")].strip()
+        if cleaned_eval_output.endswith("</json>"):
+            cleaned_eval_output = cleaned_eval_output[:-len("</json>")].strip()
+
+        json_matches = re.findall(json_pattern, cleaned_eval_output)
 
         print(f"ID {id_list[i]} - Raw Response: '{response}'")
 
@@ -131,15 +146,24 @@ def get_eval_results(ocr_list: List[str], id_list: List[str], schema_str: str) -
             continue
 
         try:
-            response = ast.literal_eval(response)
-            json_file = json.dumps(response)
-            parsed_json = json.loads(json_file)
+            #response = ast.literal_eval(response)
+            #json_file = json.dumps(response)
+            parsed_json = json.loads(json_matches[0])
+            print(f"The found json {json_matches[0]})")
             eval_results[id_list[i]] = parsed_json
+            print(f"Parsed results: {parsed_json}")
+		
         except json.JSONDecodeError as e:
             print(f"JSONDecodeError for ID {id_list[i]}: {e}")
             print(f"Problematic response was: '{response}'")
             eval_results[id_list[i]] = {"error": "JSONDecodeError", "raw_output": response}
-
+        except Exception as e:
+            eval_results[id_list[i]] = {"error": "JSONDecodeError", "raw_output": response}
+        if (i + 1) % 2 == 0:
+            with open(output_json_path, 'w', encoding='utf-8') as f_out:
+                json.dump(eval_results, f_out, indent=4, ensure_ascii=False)
+            print(f"   Results successfully saved.")
+        
     print(f"Finished processing {len(eval_results)} samples")
     return eval_results
 
@@ -154,7 +178,7 @@ if __name__ == "__main__":
         print(f"Saving all results to: {output_json_path}")
         import os
         os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
-
+        
         with open(output_json_path, 'w', encoding='utf-8') as f:
             json.dump(eval_results, f, indent=4, ensure_ascii=False)
         print("All results saved.")
